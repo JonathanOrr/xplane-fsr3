@@ -93,6 +93,9 @@ public:
     // Per submitted command buffer, in submission order (vkQueueSubmit/2), with its InputsEvents.
     void onSubmitted(VkQueue queue, uint64_t submitCall, uint64_t recording, const std::vector<InputsEvent>& events);
     void onPresent();
+    // X-Plane recorded its MSAA scene SSR: MSAA is on, so there is no depth FSR 3.1 can use. The
+    // EASU refusals that follow say "msaa", and status.txt tells the user to turn MSAA off.
+    void onMsaaScene();
 
     // Sub-pixel camera jitter, in render pixels, for main-scene passes recorded now. False until
     // the first EASU dispatch fixes the render/display sizes, and always false outside Replace.

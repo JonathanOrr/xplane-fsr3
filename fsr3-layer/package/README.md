@@ -35,6 +35,12 @@ everything back as it was.
    setting other than Off.** The setting picks the render resolution exactly as before; FSR 3.1
    does the upscaling instead of FSR 1. When it is Off, X-Plane renders at native resolution and
    the mod does nothing.
+4. **In the same settings, turn anti-aliasing off. FSR 3.1 does its own.**
+   - **MSAA must be off.** With MSAA on, X-Plane renders the scene in a way the mod can't read, so
+     FSR 1 is used instead and `status.txt` says so.
+   - **FXAA off is recommended.** X-Plane applies FXAA before the upscale, which softens the fine
+     detail FSR 3.1 reconstructs. If you prefer the look with it on, leave it on; it doesn't stop
+     FSR 3.1 from working.
 
 X-Plane's own sharpening pass still runs after the upscale, exactly as it did after FSR 1.
 
@@ -54,7 +60,7 @@ Open `logs/status.txt` in the mod's folder while X-Plane runs. It is updated eve
 |---|---|
 | `ACTIVE` | FSR 3.1 is upscaling every frame. It also shows the resolutions and the GPU time it takes. |
 | `LOADED` / `WAITING` | The mod is loaded, but X-Plane's FSR is off or no flight is loaded yet. |
-| `PARTLY ACTIVE` / `NOT USED` | Some or all frames used FSR 1. The line gives the reason, e.g. VR. |
+| `PARTLY ACTIVE` / `NOT USED` | Some or all frames used FSR 1. The line gives the reason, e.g. MSAA is on, or VR. |
 | `UNSUPPORTED X-Plane version` | X-Plane changed the parts this mod relies on. FSR 1 is used; look for a newer version of the mod. |
 | no `status.txt` at all | The mod did not load. Check the launch-option path and step 1 of Install. |
 

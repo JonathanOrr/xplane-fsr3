@@ -8,7 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 
-enum class ShaderRole : uint8_t { None, Easu, SsrScene2D, SsrSceneArray };
+// SsrSceneMsaa: X-Plane's scene SSR with MSAA on. The layer cannot use it (multisampled depth); it is
+// recognised only so the status can tell the user to turn MSAA off.
+enum class ShaderRole : uint8_t { None, Easu, SsrScene2D, SsrSceneArray, SsrSceneMsaa };
 
 const char* roleName(ShaderRole role);
 

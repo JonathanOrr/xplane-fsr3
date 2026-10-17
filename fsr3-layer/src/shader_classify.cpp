@@ -186,8 +186,9 @@ ShaderRole role(const Module& m, const char** reason)
     const Resource* ssr = m.resource("u_ssr_data");
     if (pos && vel && gb && ssr)
     {
-        // Multisampled and non-2D variants are not scene SSR the layer handles: no role, no complaint.
-        if (!pos->image || pos->image->dim != Dim2D || pos->image->ms) return ShaderRole::None;
+        if (!pos->image || pos->image->dim != Dim2D) return ShaderRole::None;
+        // The MSAA variant: recognised by its bindings only, since none of its data is read.
+        if (pos->image->ms) return at(pos, 3) && at(vel, 4) && at(gb, 11) && at(ssr, 12) ? ShaderRole::SsrSceneMsaa : ShaderRole::None;
         const char* why = nullptr;
         if (!at(pos, 3) || !at(vel, 4) || !at(gb, 11) || !at(ssr, 12)) why = "ssr_bindings";
         else if (!vel->image || vel->image->arrayed != pos->image->arrayed) why = "ssr_images";
@@ -209,6 +210,7 @@ const char* roleName(ShaderRole role)
     case ShaderRole::Easu: return "Easu";
     case ShaderRole::SsrScene2D: return "SsrScene2D";
     case ShaderRole::SsrSceneArray: return "SsrSceneArray";
+    case ShaderRole::SsrSceneMsaa: return "SsrSceneMsaa";
     default: return "None";
     }
 }

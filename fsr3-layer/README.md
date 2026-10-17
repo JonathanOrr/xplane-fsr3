@@ -7,7 +7,7 @@ upscaling. X-Plane's files are never modified. User documentation: `package/READ
 
 | Step | Where | What |
 |---|---|---|
-| Recognise passes | `src/shader_classify.cpp`, at `vkCreateShaderModule` | Classifies each SPIR-V module by its interface, so any X-Plane build with the same interface works.<br>• EASU: X-Plane's `fsr_1/4`.<br>• Scene SSR: `ssr_deferred_0,6,12,18` (2D) and `1,7,13,19` (array). Water and MSAA SSR are excluded.<br>A module is rejected, with a reason, if it has the names but not exactly what the layer's shaders read: bindings, set 0, image types, uniform member offsets, column-major matrices. `status.txt` then reports an unsupported X-Plane. `tools/classify_shaders.py` is the reference implementation. |
+| Recognise passes | `src/shader_classify.cpp`, at `vkCreateShaderModule` | Classifies each SPIR-V module by its interface, so any X-Plane build with the same interface works.<br>• EASU: X-Plane's `fsr_1/4`.<br>• Scene SSR: `ssr_deferred_0,6,12,18` (2D) and `1,7,13,19` (array). Water SSR is excluded.<br>• MSAA scene SSR (`2,8,14,20`): recognised only to report MSAA. Its multisampled depth is unusable, so upscales then refuse with `msaa`.<br>A module is rejected, with a reason, if it has the names but not exactly what the layer's shaders read: bindings, set 0, image types, uniform member offsets, column-major matrices. `status.txt` then reports an unsupported X-Plane. `tools/classify_shaders.py` is the reference implementation. |
 | Inputs | `shaders/inputs.comp`, after X-Plane's SSR dispatch | Reads, at the same stage and in the same layouts, X-Plane's own:<br>• `gbuffer_pos`: depth, 0 = sky;<br>• `gbuffer_vel`: bit 4 = own aircraft;<br>• `u_gbuffer_data` and `u_ssr_data`.<br>Writes layer-owned depth (near/distance) and motion vectors, `u_proj·(M·P)` with M = `u_local_reproj` or `u_reproj`, exactly as SSR reprojects. The previous frame's `u_proj` is used, so zooming (an FOV change) gets correct motion. |
 | Jitter | `layer.cpp` viewport hooks | Adds the frame's Halton offset to `VkViewport.x/y` inside render passes on the main scene depth. That is the depth/stencil image SSR samples as `gbuffer_pos`/`gbuffer_vel`, or failing that, the depth of a pass with a G-buffer colour attachment. Not in observe mode. |
 | Upscale | `engine.cpp`, at X-Plane's EASU dispatch | Copies EASU's input in, runs FSR 3.1 (`../fsr3-linux`), writes EASU's output as EASU would (alpha 1), skips EASU, and restores X-Plane's compute bindings. Any unmet precondition leaves EASU unchanged and logs why. X-Plane's own RCAS sharpening still follows. |
@@ -55,6 +55,7 @@ case. Lavapipe shown; an RX 9070 XT matches except for a jittered panel score of
 | buffers submitted in the wrong order (control, Lavapipe only) | layer reports `missing` | |
 | observe mode | output byte-identical to EASU | |
 | `XP_FSR3_FP16=1` | within 0.5 dB of fp32 | |
+| MSAA on (`--msaa-ssr`, X-Plane's multisampled SSR) | output byte-identical to EASU, refused as `msaa` | |
 
 Without jitter FSR 3.1 loses to EASU on static content; `../fsr3-linux` with `FSR_NO_JITTER=1`
 shows the same on its own. That is why the viewport jitter matters.
@@ -64,6 +65,7 @@ shows the same on its own. That is why the viewport jitter matters.
 - `--load N --load-threads T`: X-Plane-like descriptor churn on T worker threads.
 - `FAKE_PANEL_ROW`: how much of the screen the cockpit covers.
 - `FAKE_START_DELAY`: idle seconds before the first frame, like a loading screen.
+- `--msaa-ssr <ssr_deferred_2.spv>`: X-Plane with MSAA on.
 
 ## Threads and locking
 
@@ -124,6 +126,6 @@ glibc 2.38 headers turn it into `__isoc23_strtol`.
 - **Trails:** there is no reactive or transparency mask. Clouds, particles, rain, glass and animated
   parts (needles, props, control surfaces) get only the camera's motion.
 - **Moving objects:** AI traffic and moving scenery get world motion vectors.
-- **Not supported:** VR (more than one view layer), MSAA SSR variants, and the wave64 FSR path (see
+- **Not supported:** VR (more than one view layer), MSAA (reported in `status.txt`), and the wave64 FSR path (see
   `../fsr3-linux/PORTING.md`).
 - **Frame generation:** not attempted.

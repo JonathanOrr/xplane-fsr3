@@ -13,6 +13,9 @@
 // or FSR 3.1 when the layer replaces it - is compared with a supersampled ground truth.
 //
 // Args: <ssr_deferred_1.spv> <fsr_4.spv> [--flip-reproj] [--frames N] [--out DIR] [--raster <vert.spv> <frag.spv>]
+// --msaa-ssr <ssr_deferred_2.spv>: X-Plane with MSAA on. The scene SSR is X-Plane's multisampled
+// variant, recorded (bind and dispatch) into a command buffer that is never submitted, since this
+// harness has no multisampled G-buffer; the regular SSR is not dispatched.
 //       [--split | --split-reversed] [--zoom R] [--load N]
 // --load N (with --raster): X-Plane-like API volume to measure the layer's CPU cost. Each frame
 // resets a descriptor pool, allocates and updates N sets, and records N x {bind pipeline, bind
@@ -274,6 +277,7 @@ int main(int argc, char** argv)
     bool split = false, reversed = false;
     float zoom = 0.0f;
     int load = 0, loadPools = 1, loadPersistent = 0, loadThreads = 0;
+    const char* msaaSsr = nullptr;
     for (int i = 3; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--flip-reproj")) flip = true;
@@ -287,6 +291,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--load-pools") && i + 1 < argc) loadPools = std::max(1, atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--load-persistent") && i + 1 < argc) loadPersistent = atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--load-threads") && i + 1 < argc) loadThreads = std::max(0, atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--msaa-ssr") && i + 1 < argc) msaaSsr = argv[++i];
     }
     const char* deviceName = getenv("FAKE_DEVICE") ? getenv("FAKE_DEVICE") : "llvmpipe";
     const bool validation = getenv("FAKE_VALIDATION") && !std::strcmp(getenv("FAKE_VALIDATION"), "1");
@@ -412,6 +417,8 @@ int main(int argc, char** argv)
     VkPipelineLayout ssrLayout, easuLayout;
     VkPipeline ssrPipeline = pipeline(ssrSetLayout, module(ssrCode), ssrLayout);
     VkPipeline easuPipeline = pipeline(easuSetLayout, module(easuCode), easuLayout);
+    VkPipelineLayout msaaLayout = VK_NULL_HANDLE;
+    VkPipeline       msaaPipeline = msaaSsr ? pipeline(ssrSetLayout, module(readSpv(msaaSsr)), msaaLayout) : VK_NULL_HANDLE;
 
     // ---- Resources (X-Plane's are 2D-array images with one layer per eye).
     const VkImageUsageFlags up = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -628,6 +635,9 @@ int main(int argc, char** argv)
     cai.commandPool = cmdPool; cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cai.commandBufferCount = 2;
     CHECK(vkAllocateCommandBuffers(g.device, &cai, cbs));
     VkCommandBuffer cb = cbs[0];
+    VkCommandBuffer msaaCb = VK_NULL_HANDLE;  // --msaa-ssr: recorded every frame, never submitted
+    cai.commandBufferCount = 1;
+    if (msaaSsr) CHECK(vkAllocateCommandBuffers(g.device, &cai, &msaaCb));
     VkFence fence;
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     CHECK(vkCreateFence(g.device, &fci, nullptr, &fence));
@@ -918,9 +928,20 @@ int main(int argc, char** argv)
         }
 
         // X-Plane's order: scene SSR, then FSR 1 EASU (then RCAS, not needed here).
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ssrPipeline);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ssrLayout, 0, 1, &ssrSet, 2, ssrOffsets);
-        vkCmdDispatch(cb, (kRW + 15) / 16, (kRH + 15) / 16, 1);
+        if (msaaSsr)
+        {
+            VkCommandBufferBeginInfo mbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            CHECK(vkBeginCommandBuffer(msaaCb, &mbi));
+            vkCmdBindPipeline(msaaCb, VK_PIPELINE_BIND_POINT_COMPUTE, msaaPipeline);
+            vkCmdDispatch(msaaCb, (kRW + 15) / 16, (kRH + 15) / 16, 1);
+            CHECK(vkEndCommandBuffer(msaaCb));
+        }
+        else
+        {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ssrPipeline);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, ssrLayout, 0, 1, &ssrSet, 2, ssrOffsets);
+            vkCmdDispatch(cb, (kRW + 15) / 16, (kRH + 15) / 16, 1);
+        }
         barrier(cb, ssrOut.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL);
         if (split)
         {
@@ -1030,6 +1051,11 @@ int main(int argc, char** argv)
         vkFreeMemory(g.device, im->memory, nullptr);
     }
     vkDestroyPipeline(g.device, ssrPipeline, nullptr);
+    if (msaaSsr)
+    {
+        vkDestroyPipeline(g.device, msaaPipeline, nullptr);
+        vkDestroyPipelineLayout(g.device, msaaLayout, nullptr);
+    }
     vkDestroyPipeline(g.device, easuPipeline, nullptr);
     vkDestroyPipelineLayout(g.device, ssrLayout, nullptr);
     vkDestroyPipelineLayout(g.device, easuLayout, nullptr);

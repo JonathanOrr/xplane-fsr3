@@ -142,6 +142,7 @@ struct Engine::Impl {
     std::chrono::steady_clock::time_point statusTime = std::chrono::steady_clock::now();
     bool            statusIdle = true;  // no EASU since the previous status: the next one restarts the window
     std::string     statusReason;                        // newest refusal since the previous status
+    uint64_t        msaaPresent = UINT64_MAX;            // presents at the newest MSAA scene SSR
 
     explicit Impl(DeviceSetup& s) : setup(s), device(s.device)
     {
@@ -566,6 +567,9 @@ struct Engine::Impl {
         if (r == "layers") return "X-Plane is rendering for VR (two eyes). VR is not supported, so X-Plane's own FSR 1 is used.";
         if (r == "ab_fsr1_phase") return "A/B comparison (XP_FSR3_AB): this phase shows X-Plane's own FSR 1.";
         if (r == "observe_mode") return "observe mode (XP_FSR3=observe): FSR 3.1 runs, but the picture shown is X-Plane's FSR 1.";
+        if (r == "msaa")
+            return "X-Plane's MSAA anti-aliasing is on.\n"
+                   "FSR 3.1 does its own anti-aliasing and needs MSAA off: turn MSAA off in X-Plane's graphics settings.";
         if (r == "no_new_ssr_inputs")
             return "X-Plane's screen-space reflection pass, which supplies the depth FSR 3.1 needs, did not run before the upscale.";
         if (r == "downscale") return "X-Plane's FSR setting is not upscaling.";
@@ -639,7 +643,8 @@ struct Engine::Impl {
         if (fsr1Phase()) return refuse("ab_fsr1_phase");
         // Each SSR's inputs feed at most one FSR dispatch; whether they reach the GPU first is
         // checked at submission (onSubmitted).
-        if (inputsSeq == 0 || inputsSeq == consumedSeq) return refuse("no_new_ssr_inputs");
+        if (inputsSeq == 0 || inputsSeq == consumedSeq)
+            return refuse(msaaPresent != UINT64_MAX && presents - msaaPresent <= 3 ? "msaa" : "no_new_ssr_inputs");
         if (b.inputExtent.width != inputsExtent.width || b.inputExtent.height != inputsExtent.height)
             return refuse("size_mismatch", ",\"input\":[" + std::to_string(b.inputExtent.width) + "," + std::to_string(b.inputExtent.height) +
                                                "],\"gbuffer\":[" + std::to_string(inputsExtent.width) + "," +
@@ -973,6 +978,13 @@ void Engine::markEasu(VkCommandBuffer cmd, bool begin)
 {
     std::lock_guard<std::mutex> l(lock_);
     impl_->stamp(cmd, Impl::kTsEasu, begin);
+}
+
+void Engine::onMsaaScene()
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (impl_->msaaPresent == UINT64_MAX) impl_->log("msaa_scene", "\"presents\":" + std::to_string(impl_->presents));
+    impl_->msaaPresent = impl_->presents;
 }
 
 void Engine::onPresent()

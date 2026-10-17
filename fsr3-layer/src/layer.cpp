@@ -1413,6 +1413,11 @@ EXPORT void VKAPI_CALL vkCmdDispatch(VkCommandBuffer cmd, uint32_t x, uint32_t y
         if (d->engine) d->engine->markEasu(cmd, true);
     }
     NEXT(d, vkCmdDispatch)(cmd, x, y, z);
+    if (role == ShaderRole::SsrSceneMsaa)
+    {
+        GuardLock l;
+        if (d->engine) d->engine->onMsaaScene();
+    }
     if (role == ShaderRole::Easu)
     {
         GuardLock l;

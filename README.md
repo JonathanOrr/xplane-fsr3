@@ -17,10 +17,13 @@ Download the `xplane-fsr3-<version>.tar.gz` release and follow the README inside
 2. Set X-Plane 12's Steam launch options to `"/path/to/xplane-fsr3/xplane-fsr3" %command%`.
    Without Steam, start X-Plane through the launcher instead.
 3. In X-Plane, set *Rendering Resolution (FSR Supersampling)* to anything but Off.
+4. Turn MSAA off: FSR 3.1 does its own anti-aliasing and can't work with MSAA. FXAA off is
+   recommended too.
 
 `logs/status.txt` in the mod's folder tells you whether FSR 3.1 is active.
 
-**Requirements:** Linux and X-Plane 12 (Vulkan). Not for VR: in VR, X-Plane's FSR 1 is used.
+**Requirements:** Linux and X-Plane 12 (Vulkan), with MSAA off. Not for VR: in VR, X-Plane's FSR 1
+is used.
 
 **Tested on:** X-Plane 12.4.4-b4 with an AMD Radeon RX 9070 XT (Mesa RADV), output 5504×2166.
 Every frame was upscaled by FSR 3.1, including while the quality setting was changed in flight.
@@ -83,7 +86,7 @@ tests on that GPU as well as on Lavapipe.
 
 - **Trails:** fast gauge needles and spinning propellers can leave faint trails. The layer has no
   per-object motion vectors or reactive mask, only the camera's motion.
-- **VR:** not supported; X-Plane's FSR 1 is used.
+- **VR and MSAA:** not supported. With either, X-Plane's FSR 1 is used and `status.txt` says why.
 - **Frame generation:** not attempted.
 
 ## Licence

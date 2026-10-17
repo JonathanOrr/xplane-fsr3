@@ -85,11 +85,15 @@ with tempfile.TemporaryDirectory() as tmp:
                             ('r_zoom_base', {}, raster + ['--zoom', '0.01']),
                             ('r_zoom', dict(layer, XP_FSR3='replace'), raster + ['--zoom', '0.01']),
                             # Opt-in fp16: the layer enables the features X-Plane leaves off.
-                            ('r_fp16', dict(layer, XP_FSR3='replace', XP_FSR3_FP16='1'), raster)]
+                            ('r_fp16', dict(layer, XP_FSR3='replace', XP_FSR3_FP16='1'), raster),
+                            # MSAA on: X-Plane's multisampled SSR instead of the regular one. FSR 3.1 must
+                            # step aside and say why (validation off: the MSAA dispatch is recorded
+                            # without bindings into a buffer that is never submitted).
+                            ('msaa', dict(layer, XP_FSR3='replace'), ['--msaa-ssr', str(build / 'xp/ssr_deferred_2.spv')])]
                            + ([('split_rev', dict(layer, XP_FSR3='replace'), ['--split-reversed'])] if lavapipe else [])):
         out = tmp / case
         out.mkdir()
-        cases[case] = run(case, env, args, out, validate=case != 'split_rev')
+        cases[case] = run(case, env, args, out, validate=case not in ('split_rev', 'msaa'))
         cases[case]['image'] = (out / 'output.ppm').read_bytes()
 
     for case, r in cases.items():
@@ -112,6 +116,13 @@ with tempfile.TemporaryDirectory() as tmp:
             failures.append(f"{name}: status.txt missing or unexpected: {cases[name]['status'][:200]!r}")
     if cases['baseline']['status']:
         failures.append('baseline (no layer): status.txt written')
+    msaa = cases['msaa']
+    if msaa['image'] != base['image']:
+        failures.append('msaa: output differs from X-Plane\'s EASU')
+    if any(e['event'] == 'easu_replaced' for e in msaa['log']) or 'msaa_scene' not in {e['event'] for e in msaa['log']}:
+        failures.append('msaa: EASU replaced, or the MSAA scene SSR not noticed')
+    if not any(e['event'] == 'easu_unchanged' and e.get('reason') == 'msaa' for e in msaa['log']):
+        failures.append(f"msaa: refusals {sorted({e.get('reason') for e in msaa['log'] if e['event'] == 'easu_unchanged'})}, expected msaa")
     if cases['observe']['image'] != base['image']:
         failures.append('observe: output differs from baseline')
     if not any(e['event'] == 'easu_unchanged' and e.get('reason') == 'observe_mode' for e in cases['observe']['log']):

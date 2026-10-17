@@ -1,6 +1,6 @@
 # VK_LAYER_XPLANE_fsr3: AMD FSR 3.1 in place of X-Plane 12's FSR 1 EASU pass. See README.md.
 cmake_minimum_required(VERSION 3.20)
-project(xp_fsr3_layer VERSION 0.1.0 LANGUAGES CXX C)
+project(xp_fsr3_layer VERSION 0.1.1 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -70,12 +70,13 @@ target_link_libraries(fake_xplane PRIVATE Vulkan::Vulkan pthread)
 target_compile_options(fake_xplane PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 # Extract the two shaders the harness needs from the installed archives (read only).
 add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/xp/ssr_deferred_1.spv ${CMAKE_CURRENT_BINARY_DIR}/xp/fsr_4.spv
-    COMMAND ${Python3_EXECUTABLE} -c "import zipfile,sys;[open(sys.argv[3]+'/'+n,'wb').write(zipfile.ZipFile(a).read(n)) for a,n in ((sys.argv[1],'ssr_deferred_1.spv'),(sys.argv[2],'fsr_4.spv'))]"
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/xp/ssr_deferred_1.spv ${CMAKE_CURRENT_BINARY_DIR}/xp/ssr_deferred_2.spv ${CMAKE_CURRENT_BINARY_DIR}/xp/fsr_4.spv
+    COMMAND ${Python3_EXECUTABLE} -c "import zipfile,sys;[open(sys.argv[3]+'/'+n,'wb').write(zipfile.ZipFile(a).read(n)) for a,n in ((sys.argv[1],'ssr_deferred_1.spv'),(sys.argv[1],'ssr_deferred_2.spv'),(sys.argv[2],'fsr_4.spv'))]"
             "${XP_SPV}/ssr_deferred.xsa" "${XP_SPV}/fsr.xsa" ${CMAKE_CURRENT_BINARY_DIR}/xp
     DEPENDS "${XP_SPV}/ssr_deferred.xsa" "${XP_SPV}/fsr.xsa" VERBATIM)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/xp)
-add_custom_target(xp_shaders ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/xp/ssr_deferred_1.spv ${CMAKE_CURRENT_BINARY_DIR}/xp/fsr_4.spv)
+add_custom_target(xp_shaders ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/xp/ssr_deferred_1.spv ${CMAKE_CURRENT_BINARY_DIR}/xp/ssr_deferred_2.spv
+    ${CMAKE_CURRENT_BINARY_DIR}/xp/fsr_4.spv)
 add_test(NAME fake_xplane_lavapipe
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_fake_xplane.py ${CMAKE_CURRENT_BINARY_DIR} llvmpipe)
 if(FSR3_TEST_GPU)  # defined in ../fsr3-linux
