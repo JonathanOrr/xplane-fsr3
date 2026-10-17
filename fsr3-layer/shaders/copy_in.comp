@@ -1,0 +1,29 @@
+#version 450
+// Copies the image X-Plane bound as EASU's input (a 2D-array view, layer = eye) into a layer-owned
+// 2D image, reading it in its existing layout at the compute stage, exactly as EASU would.
+// Also records EASU's 80-byte constants (u_fsr_data) into the frame's telemetry record.
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2DArray easu_input;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D o_color;
+layout(set = 0, binding = 2, std140) uniform FsrData { uvec4 c[5]; } easu;  // Const0..3, Sample
+layout(set = 0, binding = 3, std430) buffer Telemetry {
+    uint  head[4];
+    mat4  m[3];
+    vec4  v[5];
+    uvec4 easuConst[5];
+} t;
+
+layout(push_constant) uniform Push { ivec2 size; int layer; uint pad; } pc;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, pc.size)))
+        return;
+    imageStore(o_color, p, texelFetch(easu_input, ivec3(p, pc.layer), 0));
+    if (p == ivec2(0))
+        for (int i = 0; i < 5; ++i)
+            t.easuConst[i] = easu.c[i];
+}

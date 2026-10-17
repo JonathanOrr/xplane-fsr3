@@ -1,0 +1,8 @@
+# Build output
+build*/
+dist/
+__pycache__/
+# Fetched by scripts/fetch-sdk.sh; optional unpacked validation layer
+third_party/
+# Runtime logs of a package run from the source tree
+logs/

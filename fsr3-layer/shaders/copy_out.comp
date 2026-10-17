@@ -1,0 +1,19 @@
+#version 450
+// Writes the FSR 3.1 result into the image X-Plane bound as EASU's output (a 2D-array storage view,
+// layer = eye), in its existing layout at the compute stage, exactly as EASU would. EASU writes
+// alpha 1.0 (spirv-cross of fsr_4.spv: imageStore(..., vec4(rgb, 1.0))), so this does too.
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2D fsr_output;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray easu_output;
+
+layout(push_constant) uniform Push { ivec2 size; int layer; uint pad; } pc;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, pc.size)))
+        return;
+    imageStore(easu_output, ivec3(p, pc.layer), vec4(texelFetch(fsr_output, p, 0).rgb, 1.0));
+}

@@ -1,0 +1,12 @@
+{
+  "file_format_version": "1.2.0",
+  "layer": {
+    "name": "VK_LAYER_XPLANE_fsr3",
+    "type": "GLOBAL",
+    "library_path": "@CMAKE_CURRENT_BINARY_DIR@/libVkLayer_xplane_fsr3.so",
+    "api_version": "1.3.0",
+    "implementation_version": "@PROJECT_VERSION@",
+    "description": "AMD FSR 3.1 in place of X-Plane 12's FSR 1 EASU pass (explicit; XP_FSR3=observe|replace)",
+    "functions": {"vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"}
+  }
+}

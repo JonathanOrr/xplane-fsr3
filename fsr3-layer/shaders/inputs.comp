@@ -1,0 +1,131 @@
+#version 450
+// FSR 3.1 inputs from what X-Plane's scene SSR pass (ssr_deferred) has bound.
+//
+// Runs right after X-Plane's SSR dispatch, reading the same images in the same layouts at the same
+// pipeline stage, and writes layer-owned depth and motion vectors that later memory reuse cannot
+// touch. The reconstruction mirrors ssr_deferred (spirv-cross of ssr_deferred_0.spv):
+//   gbuffer_pos.x = d, 0 for sky;  z = (d*ci.x + ci.y) / (d*ci.z + ci.w)  (view space, -Z forward)
+//   P = ((pixel + 0.5) * viewport.zw * proj_coef.xy + proj_coef.zw) * -z, z
+//   gbuffer_vel & 4 selects u_local_reproj (own aircraft) over u_reproj (world).
+//   uv = (u_proj * P).xy / w * 0.5 + 0.5
+// Motion vector = previous uv - current uv (the FSR 3.1 convention, ffx_fsr3upscaler_reproject.h).
+// The previous uv uses the PREVIOUS frame's u_proj, kept in ProjHistory: X-Plane's u_reproj is a
+// rigid camera move (live telemetry, every FOV), so with the current u_proj a scroll-wheel zoom
+// produced no motion at all and FSR ghosted (fake_xplane --zoom). ssr_deferred itself uses the
+// current u_proj for both, which is good enough for reflections.
+// Depth is written in this layer's own convention, reversed and infinite: near / distance, sky 0.
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+#if INPUT_ARRAY
+layout(set = 0, binding = 0) uniform texture2DArray gbuffer_pos;
+layout(set = 0, binding = 1) uniform utexture2DArray gbuffer_vel;
+#define FETCH(t, p) texelFetch(t, ivec3(p, pc.eye), 0)
+#else
+layout(set = 0, binding = 0) uniform texture2D gbuffer_pos;
+layout(set = 0, binding = 1) uniform utexture2D gbuffer_vel;
+#define FETCH(t, p) texelFetch(t, p, 0)
+#endif
+
+// Offsets copied from X-Plane's SPIR-V (OpMemberDecorate ... Offset).
+layout(set = 0, binding = 2, std140) uniform GBufferData {
+    layout(offset = 0)   vec4 u_viewport_size;
+    layout(offset = 16)  vec4 u_gbuffer_size;
+    layout(offset = 32)  vec4 u_proj_coefficients[2];
+    layout(offset = 64)  vec4 u_clip_info[2];
+    layout(offset = 96)  vec2 u_sample_offset;
+    layout(offset = 112) mat4 u_head_to_eye[2];
+} g;
+layout(set = 0, binding = 3, std140) uniform SsrData {
+    layout(offset = 0)   mat4 u_proj[2];
+    layout(offset = 128) mat4 u_reproj[2];
+    layout(offset = 256) mat4 u_local_reproj[2];
+} s;
+layout(set = 0, binding = 4, r32f) uniform writeonly image2D o_depth;
+layout(set = 0, binding = 5, rg16f) uniform writeonly image2D o_motion;
+
+// One record per frame, read back by the CPU a few frames later (layer_engine.cpp: Telemetry).
+layout(set = 0, binding = 6, std430) buffer Telemetry {
+    uint  tag;
+    uint  skyPixels;
+    uint  localPixels;
+    uint  pad0;
+    mat4  proj;
+    mat4  reproj;
+    mat4  localReproj;
+    vec4  clipInfo;
+    vec4  projCoef;
+    vec4  viewport;
+    vec4  gbufferSize;
+    vec4  centre;        // d, flags, motion.xy at the centre pixel
+    uvec4 easuConst[5];  // filled by copy_in.comp
+} t;
+
+// u_proj of the last two SSR passes: this pass writes proj[slot] and reads proj[slot ^ 1].
+layout(set = 0, binding = 7, std430) buffer ProjHistory {
+    mat4 proj[2];
+} h;
+
+layout(push_constant) uniform Push {
+    ivec2 size;
+    int   eye;
+    float near;
+    uint  tag;
+    uint  slot;
+    uint  havePrevious;  // 0 on the first pass: proj[slot ^ 1] is not written yet
+} pc;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, pc.size)))
+        return;
+    int  e     = pc.eye;
+    float d    = FETCH(gbuffer_pos, p).x;
+    uint flags = FETCH(gbuffer_vel, p).x;
+    bool sky   = d == 0.0;
+
+    vec2 ray = (vec2(p) + 0.5) * g.u_viewport_size.zw * g.u_proj_coefficients[e].xy + g.u_proj_coefficients[e].zw;
+    vec4 view;
+    if (sky)
+    {
+        view = vec4(ray, -1.0, 0.0);  // a direction: only the rotation of the reprojection applies
+    }
+    else
+    {
+        vec4 ci = g.u_clip_info[e];
+        float z = (d * ci.x + ci.y) / (d * ci.z + ci.w);
+        view    = vec4(ray * -z, z, 1.0);
+    }
+    mat4 reproject = (flags & 4u) != 0u ? s.u_local_reproj[e] : s.u_reproj[e];
+    mat4 projPrevious = pc.havePrevious != 0u ? h.proj[pc.slot ^ 1u] : s.u_proj[e];
+    vec4 current      = s.u_proj[e] * view;
+    vec4 previous     = projPrevious * (reproject * view);
+    if (all(equal(p, ivec2(0))))
+        h.proj[pc.slot] = s.u_proj[e];
+    vec2 motion    = (previous.xy / previous.w - current.xy / current.w) * 0.5;
+    if (any(isnan(motion)) || any(isinf(motion)))
+        motion = vec2(0.0);
+
+    float distance = -view.z;
+    float depth    = sky ? 0.0 : clamp(pc.near / max(distance, 1e-6), 0.0, 1.0);
+    imageStore(o_depth, p, vec4(depth));
+    imageStore(o_motion, p, vec4(motion, 0.0, 0.0));
+
+    if (sky)
+        atomicAdd(t.skyPixels, 1u);
+    if ((flags & 4u) != 0u)
+        atomicAdd(t.localPixels, 1u);
+    if (all(equal(p, pc.size / 2)))
+    {
+        t.tag         = pc.tag;
+        t.proj        = s.u_proj[e];
+        t.reproj      = s.u_reproj[e];
+        t.localReproj = s.u_local_reproj[e];
+        t.clipInfo    = g.u_clip_info[e];
+        t.projCoef    = g.u_proj_coefficients[e];
+        t.viewport    = g.u_viewport_size;
+        t.gbufferSize = g.u_gbuffer_size;
+        t.centre      = vec4(d, float(flags), motion);
+    }
+}
