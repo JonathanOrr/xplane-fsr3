@@ -41,6 +41,10 @@
 // the layer's viewport jitter applies. As in X-Plane (first live run), gbuffer_pos and gbuffer_vel
 // are then the depth and stencil views of the pass's reversed-Z depth/stencil buffer (stencil 4 =
 // own aircraft), not colour attachments.
+// --fsr-off-after N (with --raster): X-Plane's FSR switched off at frame N. From then on no EASU is
+// dispatched, the camera stands still, and the scene the G-buffer pass renders on the last two frames
+// is read back: with nothing upscaling, any difference between them is camera jitter left on, which
+// the screen would show as a shaking image. The JSON reports fsr_off_frame_diff.
 // Env:  FAKE_DEVICE=<name substring> (default llvmpipe), FAKE_VALIDATION=1, FAKE_SIZE (see kRW).
 // Prints one JSON line: {"psnr_wall":..,"psnr_panel":..,"validation_errors":..}.
 #include <vulkan/vulkan.h>
@@ -278,6 +282,7 @@ int main(int argc, char** argv)
     float zoom = 0.0f;
     int load = 0, loadPools = 1, loadPersistent = 0, loadThreads = 0;
     const char* msaaSsr = nullptr;
+    int fsrOffAfter = -1;
     for (int i = 3; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--flip-reproj")) flip = true;
@@ -292,6 +297,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--load-persistent") && i + 1 < argc) loadPersistent = atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--load-threads") && i + 1 < argc) loadThreads = std::max(0, atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--msaa-ssr") && i + 1 < argc) msaaSsr = argv[++i];
+        else if (!std::strcmp(argv[i], "--fsr-off-after") && i + 1 < argc) fsrOffAfter = atoi(argv[++i]);
     }
     const char* deviceName = getenv("FAKE_DEVICE") ? getenv("FAKE_DEVICE") : "llvmpipe";
     const bool validation = getenv("FAKE_VALIDATION") && !std::strcmp(getenv("FAKE_VALIDATION"), "1");
@@ -423,7 +429,7 @@ int main(int argc, char** argv)
     // ---- Resources (X-Plane's are 2D-array images with one layer per eye).
     const VkImageUsageFlags up = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     const VkImageUsageFlags att = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    Img color = makeImage(g, VK_FORMAT_R16G16B16A16_SFLOAT, kRW, kRH, up | att | VK_IMAGE_USAGE_STORAGE_BIT, true);
+    Img color = makeImage(g, VK_FORMAT_R16G16B16A16_SFLOAT, kRW, kRH, up | att | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, true);
     Img pos = makeImage(g, VK_FORMAT_R32_SFLOAT, kRW, kRH, up | att, true);
     Img vel = makeImage(g, VK_FORMAT_R32_UINT, kRW, kRH, up | att, true);
     Img depth{};  // --raster: the depth/stencil buffer, sampled by SSR as gbuffer_pos / gbuffer_vel
@@ -450,6 +456,9 @@ int main(int argc, char** argv)
                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, true);
     Buf staging = makeBuffer(g, kRW * kRH * (8 + 4 + 4), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
     Buf readback = makeBuffer(g, kDW * kDH * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    Buf offScene[2] = {};  // --fsr-off-after: the scene of the last two frames
+    if (fsrOffAfter >= 0)
+        for (Buf& b : offScene) b = makeBuffer(g, kRW * kRH * 8, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     // Per-frame uniform slot: u_environment_data +0, u_fsr_data +256, u_gbuffer_data +512, u_ssr_data +1024.
     const VkDeviceSize uboStride = std::max<VkDeviceSize>(2048, g.props.limits.minUniformBufferOffsetAlignment);
     Buf ubo = makeBuffer(g, uboStride * 8, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
@@ -766,8 +775,10 @@ int main(int argc, char** argv)
     if (const char* delay = std::getenv("FAKE_START_DELAY")) std::this_thread::sleep_for(std::chrono::seconds(atoi(delay)));
     for (int f = 0; f < frames; ++f)
     {
-        const Vec3 cam = {velocity.x * f, velocity.y * f, 0};
-        g_f     = kF * std::pow(1.0f + zoom, float(f));
+        const bool fsrOff = fsrOffAfter >= 0 && f >= fsrOffAfter;
+        const int  moved  = fsrOff ? fsrOffAfter : f;  // with FSR off the camera stands still
+        const Vec3 cam = {velocity.x * moved, velocity.y * moved, 0};
+        g_f     = kF * std::pow(1.0f + zoom, float(moved));
         proj[0] = g_f / kAspect; proj[5] = g_f;
         // CPU scene at render resolution (uploaded unless --raster draws it).
         auto* c16 = reinterpret_cast<uint16_t*>(staging.mapped);
@@ -912,6 +923,15 @@ int main(int argc, char** argv)
                 }
             }
             vkCmdEndRenderPass(cb);
+            if (fsrOff && f >= frames - 2)
+            {
+                barrier(cb, color.image, RO, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                VkBufferImageCopy sc{};
+                sc.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                sc.imageExtent = {kRW, kRH, 1};
+                vkCmdCopyImageToBuffer(cb, color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, offScene[f - (frames - 2)].buffer, 1, &sc);
+                barrier(cb, color.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, RO);
+            }
         }
         else
         {
@@ -949,10 +969,13 @@ int main(int argc, char** argv)
             cb = cbs[1];
             CHECK(vkBeginCommandBuffer(cb, &bi));
         }
-        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, easuPipeline);
-        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, easuLayout, 0, 1, &easuSet, 1, &easuOffset);
-        vkCmdDispatch(cb, (kDW + 15) / 16, (kDH + 15) / 16, 1);
-        if (f == frames - 1)
+        if (!fsrOff)
+        {
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, easuPipeline);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, easuLayout, 0, 1, &easuSet, 1, &easuOffset);
+            vkCmdDispatch(cb, (kDW + 15) / 16, (kDH + 15) / 16, 1);
+        }
+        if (f == frames - 1 && !fsrOff)
         {
             barrier(cb, easuOut.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
             VkBufferImageCopy rc{};
@@ -1015,7 +1038,15 @@ int main(int argc, char** argv)
     if (load > 0 && frames > 1)
         printf("{\"load\":%d,\"load_alloc_us\":%.1f,\"load_record_us\":%.1f,\"load_threads\":%d,\"load_threads_us\":%.1f}\n", load,
                loadAllocUs / (frames - 1), loadRecordUs / (frames - 1), int(workers.size()), loadThreadsUs / (frames - 1));
-    printf("{\"zoom\":%.4f,\"psnr_wall\":%.3f,\"psnr_panel\":%.3f,\"validation_errors\":%d,\"frames\":%d,\"flip\":%s,\"device\":\"%s\"}\n", zoom, pw, pp,
+    double offDiff = -1;  // --fsr-off-after: largest difference between the last two frames' scene
+    if (fsrOffAfter >= 0 && fsrOffAfter <= frames - 2)
+    {
+        offDiff = 0;
+        auto* a = reinterpret_cast<uint16_t*>(offScene[0].mapped);
+        auto* b = reinterpret_cast<uint16_t*>(offScene[1].mapped);
+        for (uint32_t k = 0; k < kRW * kRH * 4; ++k) offDiff = std::max(offDiff, double(std::fabs(fromHalf(a[k]) - fromHalf(b[k]))));
+    }
+    printf("{\"fsr_off_frame_diff\":%g,\"zoom\":%.4f,\"psnr_wall\":%.3f,\"psnr_panel\":%.3f,\"validation_errors\":%d,\"frames\":%d,\"flip\":%s,\"device\":\"%s\"}\n", offDiff, zoom, pw, pp,
            g_validationErrors, frames, flip ? "true" : "false", g.props.deviceName);
 
     // Destroy everything this program created, so that any object the validation layer still
@@ -1043,7 +1074,8 @@ int main(int argc, char** argv)
     vkDestroyDescriptorPool(g.device, pool, nullptr);
     vkDestroySampler(g.device, sampler, nullptr);
     vkDestroySampler(g.device, nearest, nullptr);
-    for (Buf* b : {&staging, &readback, &ubo}) { vkDestroyBuffer(g.device, b->buffer, nullptr); vkFreeMemory(g.device, b->memory, nullptr); }
+    for (Buf* b : {&staging, &readback, &ubo, &offScene[0], &offScene[1]})
+        if (b->buffer) { vkDestroyBuffer(g.device, b->buffer, nullptr); vkFreeMemory(g.device, b->memory, nullptr); }
     for (Img* im : {&color, &pos, &vel, &mat, &nrm, &hiz, &ssrHistory, &brdf, &ssrOut, &easuOut})
     {
         vkDestroyImageView(g.device, im->view, nullptr);

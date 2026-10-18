@@ -1,6 +1,6 @@
 # VK_LAYER_XPLANE_fsr3: AMD FSR 3.1 in place of X-Plane 12's FSR 1 EASU pass. See README.md.
 cmake_minimum_required(VERSION 3.20)
-project(xp_fsr3_layer VERSION 0.1.1 LANGUAGES CXX C)
+project(xp_fsr3_layer VERSION 0.1.2 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

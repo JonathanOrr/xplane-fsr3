@@ -12,6 +12,9 @@ Cases (each with the Khronos validation layer when it is unpacked in third_party
   r_zoom_*  --raster with --zoom 0.01 (scroll-wheel zoom: the projection changes every frame while
             u_reproj stays rigid). Before the layer used the previous frame's u_proj, FSR scored
             12.80 / 21.17 dB here against EASU's 13.89 / 34.69 (live: heavy ghosting while zooming).
+  r_fsr_off --raster, X-Plane's FSR switched off at frame 36 (--fsr-off-after): no EASU from then on and
+            the camera still. The scene of the last two frames must be identical: nothing removes
+            jitter without FSR 3.1, so jitter left on shakes the picture (seen live in 0.1.x).
   split_rev the two buffers submitted in the wrong order, without validation (Lavapipe only): the
             layer must report the read as "missing" (negative control for its submission-order check).
 Checks: no validation errors; the layer engaged every frame after the first; on the moving wall
@@ -86,6 +89,8 @@ with tempfile.TemporaryDirectory() as tmp:
                             ('r_zoom', dict(layer, XP_FSR3='replace'), raster + ['--zoom', '0.01']),
                             # Opt-in fp16: the layer enables the features X-Plane leaves off.
                             ('r_fp16', dict(layer, XP_FSR3='replace', XP_FSR3_FP16='1'), raster),
+                            # X-Plane's FSR switched off mid-flight: the camera jitter must stop with it.
+                            ('r_fsr_off', dict(layer, XP_FSR3='replace'), raster + ['--fsr-off-after', '36']),
                             # MSAA on: X-Plane's multisampled SSR instead of the regular one. FSR 3.1 must
                             # step aside and say why (validation off: the MSAA dispatch is recorded
                             # without bindings into a buffer that is never submitted).
@@ -127,6 +132,12 @@ with tempfile.TemporaryDirectory() as tmp:
         failures.append('observe: output differs from baseline')
     if not any(e['event'] == 'easu_unchanged' and e.get('reason') == 'observe_mode' for e in cases['observe']['log']):
         failures.append('observe: the layer never ran FSR in observe mode')
+    off = cases['r_fsr_off']
+    if not any(e['event'] == 'easu_replaced' and e.get('jittered_frames', 0) >= 1 for e in off['log']):
+        failures.append('r_fsr_off: never jittered while FSR 3.1 ran (the check below would prove nothing)')
+    if off.get('fsr_off_frame_diff') != 0:
+        failures.append(f"r_fsr_off: with X-Plane's FSR off the still scene changes between frames by "
+                        f"{off.get('fsr_off_frame_diff')} (camera jitter left on)")
     # Jittered (raster) G-buffer: FSR 3.1 must beat EASU on the static panel as well as the wall.
     rb, rr = cases['r_base'], cases['r_replace']
     if not rr['psnr_panel'] > rb['psnr_panel'] + 2.0:

@@ -134,6 +134,7 @@ struct Engine::Impl {
     float           fovY = 0.0f;  // radians, from telemetry; 0 until known
     int32_t         phaseCount = 0;              // jitter sequence length, from the first FSR context
     uint64_t        jitterAppliedFrame = UINT64_MAX;
+    uint64_t        replacedPresent = UINT64_MAX;  // presents at the newest EASU replaced by FSR 3.1
     uint64_t        jitteredFrames = 0;
     std::chrono::steady_clock::time_point lastFsr{};
     uint64_t        ssrCount = 0, easuCount = 0, replaced = 0;
@@ -749,6 +750,7 @@ struct Engine::Impl {
         vkCmdPushConstants(cmd, copyOut.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pout), &pout);
         vkCmdDispatch(cmd, (b.outputExtent.width + 7) / 8, (b.outputExtent.height + 7) / 8, 1);
         restore(cmd, state);
+        replacedPresent = presents;
         if (++replaced <= 3 || replaced % 600 == 0)
             log("easu_replaced", "\"count\":" + std::to_string(replaced) + ",\"frame_ms\":" + num(dtMs) + ",\"fov_y\":" + num(fovY) +
                                      ",\"jitter\":[" + num(dd.jitterOffset.x) + "," + num(dd.jitterOffset.y) + "],\"jittered_frames\":" +
@@ -786,7 +788,11 @@ struct Engine::Impl {
 
     bool currentJitter(float& x, float& y)
     {
+        // Unused jitter is visible: the image shakes by up to half a render pixel. FSR 3.1 removes it,
+        // so the scene is jittered only while FSR 3.1 is replacing EASU. The first frame after X-Plane's
+        // FSR is switched (back) on is not jittered; FSR 3.1 then gets offset 0 for it.
         if (setup.mode != Mode::Replace || phaseCount <= 0 || fsr1Phase()) return false;
+        if (replacedPresent == UINT64_MAX || presents - replacedPresent > 2) return false;
         return ffxFsr3UpscalerGetJitterOffset(&x, &y, static_cast<int32_t>(presents % uint64_t(phaseCount)), phaseCount) == FFX_OK;
     }
 

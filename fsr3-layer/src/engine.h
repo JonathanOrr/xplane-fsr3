@@ -97,8 +97,10 @@ public:
     // EASU refusals that follow say "msaa", and status.txt tells the user to turn MSAA off.
     void onMsaaScene();
 
-    // Sub-pixel camera jitter, in render pixels, for main-scene passes recorded now. False until
-    // the first EASU dispatch fixes the render/display sizes, and always false outside Replace.
+    // Sub-pixel camera jitter, in render pixels, for main-scene passes recorded now. True only while
+    // FSR 3.1 is replacing EASU (it did within the last 2 frames), so nothing jitters with X-Plane's
+    // FSR switched off, in its FSR 1 phase of an A/B, or while every EASU is refused (MSAA on); always
+    // false outside Replace.
     bool jitter(float& x, float& y);
     // A main-scene pass of the current frame was recorded with jitter(); FSR then gets the same offset.
     void noteJitterApplied();
